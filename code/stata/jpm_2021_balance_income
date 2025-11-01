@@ -1,0 +1,238 @@
+
+// import ccm link
+import delimited "ccm_link.csv", clear varnames(1)
+
+gen datadate_s = date(datadate, "MDY")
+format datadate_s %td
+rename lpermno permno
+
+save ccm_link.dta, replace
+
+
+
+
+//import compustat
+import delimited "compustat.csv", clear varnames(1)
+
+save compustat.dta, replace
+
+
+//import crsp
+
+import delimited "crsp.csv", clear varnames(1)
+gen mdate = date(mthcaldt, "MDY")
+format mdate %td
+
+gen year  = year(mdate)
+
+save crsp.dta, replace
+
+
+//merge crsp with ccm link
+use crsp.dta, clear
+*gen year = year (mdate)
+collapse (mean) mthret (last) mthprc, by(permno year)
+rename year fyear
+save crsp_yearly.dta, replace
+
+use ccm_link.dta, clear
+merge m:1 permno fyear using crsp_yearly.dta
+
+
+duplicates list permno fyear
+duplicates drop permno fyear, force
+
+save crsp_ccm.dta, replace
+
+
+drop _merge
+
+//merge with compustat 
+
+
+//clean compustat
+use compustat.dta, clear
+
+gen datadate_s = date(datadate, "MDY")
+format datadate_s %td
+
+gen fyear = year(datadate_s)
+
+save compustat.dta, replace
+
+use compustat.dta, clear
+keep if indfmt== "INDL"
+keep if datafmt== "STD"
+keep if consol== "C"
+
+duplicates report gvkey fyear
+
+bys gvkey fyear (datadate_s): keep if _n==1
+save compustat_clean.dta, replace
+
+// merge compustat with ccm+crsp_ccm
+ use crsp_ccm.dta, clear
+ drop _merge
+ merge m:1 gvkey fyear using compustat_clean.dta
+ 
+duplicates report gvkey fyear permno
+
+save crsp_ccm_compustat.dta, replace
+
+//summary statistics
+
+count
+
+//unique firms
+egen n_firms = tag(gvkey)
+count if n_firms
+// number of unique firms by compustat id
+egen n_permnos = tag(permno)
+count if n_permnos
+
+
+//time coverage
+
+tabulate fyear
+
+
+//summary statatistics for key variables
+
+summarize ret prc at sale ni
+
+
+// tables
+
+tabstat ret prc at sale ni, stats(mean sd min p25 median p75 max n) column(statistics)
+
+
+
+//import series
+*series 1
+
+import delimited "series1.csv", clear varnames(1) case(lower)
+save series1.dta, replace
+
+
+*series 2
+
+import delimited "series2.csv", clear varnames(1) case(lower)
+save series2.dta, replace
+
+*other series
+
+import delimited "otherseries.csv", clear varnames(1) case(lower)
+save otherseries.dta, replace
+
+
+//merge series together
+
+use series1.dta, clear
+
+merge 1:1 rssd9001 rssd9999 using series2.dta
+
+drop _merge
+
+*merge other series
+
+merge 1:1 rssd9001 rssd9999 using otherseries.dta
+
+
+drop _merge
+
+* save the full y9c dataset
+save y9c_full_2021.dta, replace
+
+* sanity check
+
+use y9c_full_2021.dta, clear
+describe
+count
+
+
+*use y9c_full_2021.dta, clear
+*merge m:1 rssd9001 using bank_crsp_link.dta
+
+
+// import the crsp bank link
+
+
+import delimited "bank_crsp_link.csv",  clear varnames(1) case(lower)
+save bank_crsp_link.dta, replace
+
+describe
+
+
+//merge y-9c with link
+
+* open full y-9c file
+
+use y9c_full_2021.dta, clear
+
+gen repdate = date(rssd9999, "MDY")
+format repdate %td
+
+*keep only december filings 
+
+keep if year(repdate)==2021 & month(repdate) == 12
+
+*confirm unique by bank 
+
+duplicates report rssd9001
+
+save y9c_dec2021.dta, replace
+
+
+
+
+// merge with bank crsp link 
+
+use y9c_dec2021.dta, clear
+merge 1:m rssd9001 using bank_crsp_link.dta
+drop _merge
+save y9c_linked.dta, replace
+
+
+
+//merge with crsp ccm compustat 
+use crsp_ccm_compustat.dta, clear
+drop _merge
+rename lpermco permco 
+
+save crsp_ccm_compustat.dta, replace
+
+
+** keep the only 2021 for crsp compustat
+use crsp_ccm_compustat.dta, clear
+keep if fyear == 2021
+
+duplicates report permco
+
+collapse (mean) ni revt bkvlps at, by(permco)
+
+save crsp_ccm_compustat_2021.dta, replace
+
+
+*merge
+use y9c_linked.dta, clear
+*drop _merge
+
+merge m:1 permco using crsp_ccm_compustat_2021.dta
+drop _merge
+save bank_data_merged_[mertakin].dta
+
+
+*count unique firms
+
+use bank_data_merged_[mertakin].dta, clear
+egen tag_merge = tag(permco)
+count if tag_merge
+
+
+* calculate individual loans 
+gen loans_indiv = bhckb528 + bhckb529 + bhckb530
+
+
+*summary statistics
+tabstat bhck3123 bhck1773 loans_indiv ni revt bkvlps at, ///
+	stats(mean median min max sd) columns(statistics)
